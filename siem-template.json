@@ -1,0 +1,71 @@
+{
+  "index_patterns": ["siem-logs-*"],
+  "template": {
+    "mappings": {
+      "properties": {
+        "@timestamp": {
+          "type": "date"
+        },
+        "geoip": {
+          "properties": {
+            "location": {
+              "type": "geo_point"
+            }
+          }
+        },
+        "source": {
+          "properties": {
+            "address": {
+              "type": "ip"
+            }
+          }
+        },
+        "http": {
+          "properties": {
+            "request": {
+              "properties": {
+                "method": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "response": {
+              "properties": {
+                "status_code": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "url": {
+          "properties": {
+            "original": {
+              "type": "keyword"
+            }
+          }
+        },
+        "user_agent": {
+          "properties": {
+            "original": {
+              "type": "keyword"
+            }
+          }
+        },
+        "bytes": {
+          "type": "integer"
+        },
+        "mitre": {
+          "properties": {
+            "technique_id": {
+              "type": "keyword"
+            },
+            "technique_name": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    }
+  }
+}
