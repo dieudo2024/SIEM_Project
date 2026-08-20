@@ -1,23 +1,38 @@
-# SIEM Project: Complete Guide
+# SIEM Project: Complete Guide (All Phases 1–5)
 
-This guide walks through building the project from an empty folder to a working dashboard. It matches the actual, currently-working configuration in this repo — every field name, script, and JSON block below is copied directly from the deployed files, not reconstructed from memory.
+This guide is written for someone starting from scratch with no project files provided. The user is expected to create the necessary project folder and configuration files manually before running the SIEM environment.
 
----
+## 0. Fresh Start: Create the Project from Zero
 
-## 1. Prerequisites
+If you are starting from a brand-new computer or a clean workspace, complete these steps first:
 
-- Docker Engine v20.10+ and Docker Compose v2.0+
-- A terminal (PowerShell, Bash, etc.)
-- Minimum 8 GB host RAM
+### Step 0.1: Install the required software
+Install:
+- Docker Desktop or Docker Engine
+- Docker Compose
+- A terminal such as PowerShell, Command Prompt, or Bash
+- A text editor such as VS Code, Notepad++, or Nano
 
-## 2. Create the project folder and file tree
+### Step 0.2: Create the project folder
+Create a folder on your machine where the SIEM project will live. For example:
 
 ```bash
-mkdir SIEM_Project && cd SIEM_Project
-mkdir nginx docs docs/screenshots
+mkdir SIEM_Project
+cd SIEM_Project
 ```
 
-Target structure:
+On Windows PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Path .\SIEM_Project
+Set-Location .\SIEM_Project
+```
+
+### Step 0.3: Use the project files provided in the repository
+
+This guide describes the configuration that is actually present in the project. Do not recreate the Docker, Filebeat, Logstash, Elasticsearch template, NGINX, or attack-script files from configuration blocks copied out of this guide. Use the files in the repository so the documentation and the running environment stay synchronized.
+
+The active project contains:
 
 ```text
 SIEM_Project/
@@ -27,518 +42,142 @@ SIEM_Project/
 ├── siem-template.json
 ├── run_attacks.sh
 ├── additional_attacks.sh
+├── default.conf
 ├── nginx/
 │   └── default.conf
-├── .env.example
+├── .env
 ├── .gitignore
 ├── README.md
+├── StepByStep_corrected.md
 └── docs/
     └── screenshots/
 ```
 
-## 3. Create each file
+The active Docker Compose file mounts `logstash.conf`, `siem-template.json`, `filebeat.yml`, and the shared NGINX log volume. It does **not** mount either `default.conf` file. NGINX therefore uses the configuration supplied by the `nginx:latest` image when the stack starts.
 
-### 3.1 `docker-compose.yml`
+### Step 0.4: Confirm the repository files are present
 
-```yaml
-services:
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
-    container_name: elasticsearch
-    mem_limit: 1g
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - bootstrap.memory_lock=true
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    cap_add:
-      - IPC_LOCK
-    ports:
-      - "9200:9200"
-    volumes:
-      - esdata:/usr/share/elasticsearch/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-      start_period: 30s
-    networks:
-      - siem-network
+From the project directory, verify the files before starting Docker:
 
-  logstash:
-    image: docker.elastic.co/logstash/logstash:8.12.0
-    container_name: logstash
-    volumes:
-      - ./logstash.conf:/usr/share/logstash/pipeline/logstash.conf
-      - ./siem-template.json:/usr/share/logstash/config/siem-template.json:ro
-    environment:
-      - LS_JAVA_OPTS=-Xms256m -Xmx256m
-    healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/9600' || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-      start_period: 60s
-    networks:
-      - siem-network
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.12.0
-    container_name: kibana
-    ports:
-      - "5601:5601"
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY}
-      - XPACK_SECURITY_ENCRYPTIONKEY=${XPACK_SECURITY_ENCRYPTIONKEY}
-      - XPACK_REPORTING_ENCRYPTIONKEY=${XPACK_REPORTING_ENCRYPTIONKEY}
-    networks:
-      - siem-network
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-      logstash:
-        condition: service_healthy
-
-  filebeat:
-    image: docker.elastic.co/beats/filebeat:8.12.0
-    container_name: filebeat
-    user: root
-    command: filebeat -e -strict.perms=false
-    environment:
-      - setup.template.settings.index.number_of_shards=1
-    volumes:
-      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
-      - nginx-logs:/var/log/nginx:ro
-    networks:
-      - siem-network
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-      logstash:
-        condition: service_healthy
-
-  web-server:
-    image: nginx:latest
-    container_name: web-server
-    ports:
-      - "8081:80"
-    volumes:
-      - nginx-logs:/var/log/nginx
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-    networks:
-      - siem-network
-    command: sh -c "rm -f /var/log/nginx/access.log /var/log/nginx/error.log && touch /var/log/nginx/access.log /var/log/nginx/error.log && nginx -g 'daemon off;'"
-
-  attacker:
-    image: kalilinux/kali-rolling
-    container_name: attacker
-    tty: true
-    networks:
-      - siem-network
-
-networks:
-  siem-network:
-    driver: bridge
-
-volumes:
-  nginx-logs:
-  esdata:
+```bash
+ls
 ```
 
-**Notes on choices made here:**
-- `esdata` is a named volume so Elasticsearch survives `docker compose down` — without it, every restart wipes all indexed data *and* your saved Kibana Data View/dashboards/alert rules.
-- The Logstash healthcheck uses a raw TCP check (`/dev/tcp`) instead of `curl`, because the official Logstash image (built on UBI9-minimal) doesn't ship `curl`. Using `curl` here silently deadlocks Kibana and Filebeat, since both `depends_on: condition: service_healthy` against Logstash.
-- `web-server` mounts `./nginx/default.conf` explicitly — without this line, nginx silently falls back to its own factory-default config, and none of the customization in step 3.6 ever takes effect.
+On Windows PowerShell:
 
-### 3.2 `filebeat.yml`
-
-```yaml
-filebeat.inputs:
-- type: filestream
-  id: nginx-logs
-  enabled: true
-  paths:
-    - /var/log/nginx/access.log
-    - /var/log/nginx/error.log
-  fields:
-    service: nginx
-    type: nginx-access
-  fields_under_root: true
-
-output.logstash:
-  hosts: ["logstash:5044"]
+```powershell
+Get-ChildItem
 ```
 
-### 3.3 `logstash.conf`
+Do not replace the repository configuration with copies embedded in this guide. The guide intentionally refers to the project files directly.
 
-```conf
-input {
-  beats {
-    port => 5044
-  }
-}
+### Step 0.5: Configure the local environment
 
-filter {
-  if [log][file][path] =~ "/var/log/nginx" {
-    if [log][file][path] =~ "access.log" {
-      grok {
-        match => { "message" => '%{IPORHOST:clientip} %{HTTPDUSER:ident} %{HTTPDUSER:auth} \[%{HTTPDATE:timestamp}\] "(?:%{WORD:verb} %{NOTSPACE:request}(?: HTTP/%{NUMBER:httpversion})?|%{DATA:rawrequest})" %{NUMBER:response} (?:%{NUMBER:bytes}|-) %{QS:referrer} %{QS:http_user_agent} %{QS:xff}' }
-        tag_on_failure => ["grok_failed"]
-      }
-    } else if [log][file][path] =~ "error.log" {
-      grok {
-        match => { "message" => '%{YEAR:year}/%{MONTHNUM:month}/%{MONTHDAY:day} %{TIME:time} \[%{LOGLEVEL:loglevel}\] %{NUMBER:pid}#%{NUMBER:tid}: (?:\*%{NUMBER:connection} )?(?:%{DATA:errormsg}, client: %{IP:clientip}, server: %{DATA:server}, request: \"%{WORD:method} %{DATA:request} HTTP/%{NUMBER:httpversion}\", host: \"%{DATA:http_host}\"|%{GREEDYDATA:errormsg})' }
-        tag_on_failure => ["grok_failed"]
-      }
-    } else {
-      grok {
-        match => { "message" => '%{IPORHOST:clientip} %{HTTPDUSER:ident} %{HTTPDUSER:auth} \[%{HTTPDATE:timestamp}\] "(?:%{WORD:verb} %{NOTSPACE:request}(?: HTTP/%{NUMBER:httpversion})?|%{DATA:rawrequest})" %{NUMBER:response} (?:%{NUMBER:bytes}|-) %{QS:referrer} %{QS:http_user_agent} %{QS:xff}' }
-        tag_on_failure => ["grok_failed"]
-      }
-    }
-
-    # Strip the surrounding quotes %{QS} captures on agent/xff before they're used further.
-    if [http_user_agent] {
-      mutate { gsub => [ "http_user_agent", "^\"|\"$", "" ] }
-    }
-    if [xff] {
-      mutate { gsub => [ "xff", "^\"|\"$", "" ] }
-    }
-
-    # Prefer X-Forwarded-For for GeoIP when present. In this lab, real traffic
-    # comes from inside the Docker network (private IPs, which MaxMind can't
-    # geolocate), so run_attacks.sh spoofs an X-Forwarded-For header with
-    # real public DNS-resolver IPs to make the geographic map meaningful for
-    # demonstration. This also mirrors a genuine production pattern: services
-    # behind a reverse proxy/load balancer must GeoIP the forwarded client IP,
-    # not the proxy's own address.
-    if [xff] and [xff] != "-" and [xff] != "" {
-      mutate { add_field => { "[network][geoip_source]" => "%{xff}" } }
-    } else if [clientip] {
-      mutate { add_field => { "[network][geoip_source]" => "%{clientip}" } }
-    }
-
-    if [network][geoip_source] {
-      geoip {
-        source => "[network][geoip_source]"
-        target => "geoip"
-        fields => ["country_name","city_name","location"]
-        ecs_compatibility => "disabled"
-      }
-    }
-
-    date {
-      match => [ "timestamp", "dd/MMM/yyyy:HH:mm:ss Z", "ISO8601", "yyyy/MM/dd HH:mm:ss" ]
-      target => "@timestamp"
-      remove_field => ["timestamp"]
-    }
-
-    mutate {
-      rename => {
-        "clientip" => "[source][address]"
-        "verb" => "[http][request][method]"
-        "request" => "[url][original]"
-        "response" => "[http][response][status_code]"
-        "http_user_agent" => "[user_agent][original]"
-      }
-      convert => { "[http][response][status_code]" => "integer" }
-      convert => { "bytes" => "integer" }
-    }
-
-    # --- MITRE ATT&CK technique tagging ---
-    # Event-level pattern matching for the dashboard's technique breakdown
-    # panel. Mirrors the same conditions as the Kibana alert rules, but tags
-    # every matching event individually rather than requiring a threshold
-    # count over a 5-minute window. A single event can legitimately match
-    # more than one technique, so these are independent `if` blocks, not
-    # if/elsif — mutate's add_field appends rather than overwrites when a
-    # field already has a value, so [mitre][technique_id] naturally becomes
-    # an array when more than one condition matches.
-
-    if [http][response][status_code] in [401, 403] {
-      mutate {
-        add_field => {
-          "[mitre][technique_id]" => "T1110"
-          "[mitre][technique_name]" => "Brute Force"
-        }
-      }
-    }
-
-    if [url][original] and [url][original] =~ /(?i)(drop|union|select|\bor\b)/ {
-      mutate {
-        add_field => {
-          "[mitre][technique_id]" => "T1190"
-          "[mitre][technique_name]" => "Exploit Public-Facing Application"
-        }
-      }
-    }
-
-    if [url][original] and [url][original] =~ /(\.\.\/|\.\.\\|%2e%2e)/ {
-      mutate {
-        add_field => {
-          "[mitre][technique_id]" => "T1083"
-          "[mitre][technique_name]" => "File and Directory Discovery"
-        }
-      }
-    }
-
-    if [user_agent][original] and [user_agent][original] =~ /(?i)(sqlmap|nikto|nmap|metasploit)/ {
-      mutate {
-        add_field => {
-          "[mitre][technique_id]" => "T1595"
-          "[mitre][technique_name]" => "Active Scanning"
-        }
-      }
-    }
-
-    if [http][response][status_code] and [http][response][status_code] >= 400 {
-      mutate {
-        add_field => {
-          "[mitre][technique_id]" => "T1498"
-          "[mitre][technique_name]" => "Network Denial of Service"
-        }
-      }
-    }
-  }
-}
-
-output {
-  elasticsearch {
-    hosts => ["http://elasticsearch:9200"]
-    index => "siem-logs-%{+YYYY.MM.dd}"
-    template => "/usr/share/logstash/config/siem-template.json"
-    template_name => "siem-template"
-    template_overwrite => true
-  }
-
-  stdout {
-    codec => rubydebug
-  }
-}
-```
-
-**Why the grok pattern is written out manually instead of using `%{COMBINEDAPACHELOG}`:** Filebeat automatically adds its own `agent` metadata field to every event (`agent.type`, `agent.name`, `agent.id`, etc.). `%{COMBINEDAPACHELOG}`'s built-in field name for the HTTP User-Agent header is *also* `agent` — using it collides with Filebeat's field and corrupts the document, which Elasticsearch then rejects outright (this is what caused a full pipeline failure with `docs.count: 0` earlier in this project's history). The custom pattern above captures the same data into `http_user_agent` instead, avoiding the collision entirely.
-
-### 3.4 `siem-template.json`
-
-```json
-{
-  "index_patterns": ["siem-logs-*"],
-  "template": {
-    "mappings": {
-      "properties": {
-        "@timestamp": {
-          "type": "date"
-        },
-        "geoip": {
-          "properties": {
-            "location": {
-              "type": "geo_point"
-            }
-          }
-        },
-        "source": {
-          "properties": {
-            "address": {
-              "type": "ip"
-            }
-          }
-        },
-        "http": {
-          "properties": {
-            "request": {
-              "properties": {
-                "method": {
-                  "type": "keyword"
-                }
-              }
-            },
-            "response": {
-              "properties": {
-                "status_code": {
-                  "type": "integer"
-                }
-              }
-            }
-          }
-        },
-        "url": {
-          "properties": {
-            "original": {
-              "type": "keyword"
-            }
-          }
-        },
-        "user_agent": {
-          "properties": {
-            "original": {
-              "type": "keyword"
-            }
-          }
-        },
-        "bytes": {
-          "type": "integer"
-        },
-        "mitre": {
-          "properties": {
-            "technique_id": {
-              "type": "keyword"
-            },
-            "technique_name": {
-              "type": "keyword"
-            }
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-Note `geoip.location` is flat, not nested under `geoip.geo.location`. Logstash 8.x's `geoip` filter defaults to ECS-compatible output (which nests under an extra `geo` level) — the `ecs_compatibility => "disabled"` line in `logstash.conf` above forces the flat shape this template expects.
-
-### 3.5 `.env.example` and `.env`
-
-```env
-# Copy this file to .env and replace each value with your own generated key:
-#   openssl rand -base64 32
-#
-# .env is gitignored — never commit real keys.
-
-XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=replace_with_generated_key
-XPACK_SECURITY_ENCRYPTIONKEY=replace_with_generated_key
-XPACK_REPORTING_ENCRYPTIONKEY=replace_with_generated_key
-```
+If the repository provides `.env.example`, copy it to `.env` and populate the three Kibana encryption-key variables. If `.env` is already provided for your local lab, use it as configured and do not commit real secrets.
 
 ```bash
 cp .env.example .env
-openssl rand -base64 32   # run 3 times, paste one result into each variable in .env
+openssl rand -base64 64
 ```
 
-### 3.6 `nginx/default.conf`
+Generate three unique values and place them in:
 
-```nginx
-log_format siem_custom '$remote_addr - $remote_user [$time_local] "$request" '
-                      '$status $body_bytes_sent "$http_referer" "$http_user_agent" "$http_x_forwarded_for"';
-
-server {
-    listen 80;
-    server_name localhost;
-
-    access_log /var/log/nginx/access.log siem_custom;
-    error_log /var/log/nginx/error.log warn;
-
-    location / {
-        root /usr/share/nginx/html;
-        index index.html;
-    }
-}
+```env
+XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=...
+XPACK_SECURITY_ENCRYPTIONKEY=...
+XPACK_REPORTING_ENCRYPTIONKEY=...
 ```
 
-### 3.7 `run_attacks.sh`
+### Step 0.6: Final file creation checklist
 
-The full script is long (six attack categories, each looping tens to hundreds of requests). Rather than duplicate all ~110 lines here, copy it directly from the repo — the key structural points to understand:
+Before starting Docker, make sure the repository contains the files used by the project:
 
-- Every request runs via `docker exec -i attacker bash <<'ATTACKER_SCRIPT' ... ATTACKER_SCRIPT`, so traffic genuinely originates from the `attacker` container over the internal Docker network, not from your host.
-- Every `curl` call sends `-H "X-Forwarded-For: $ip"`, cycling through a fixed list of real public DNS-resolver IPs (Google, Cloudflare, Quad9, Yandex, a Chinese/Korean/Brazilian/South African resolver) — this is what gives the GeoIP map something real to plot, since actual container-to-container traffic is private-IP-only and unmappable.
-- One XSS payload is intentionally the *literal string* `$(whoami)` (escaped as `"\$(whoami)"`) — this demonstrates a command-injection-style payload without actually executing anything. If you ever see an **unescaped** `$(whoami)` in an attack script, that's a real bug: it executes for real wherever the script runs.
+- [ ] `docker-compose.yml`
+- [ ] `filebeat.yml`
+- [ ] `logstash.conf`
+- [ ] `siem-template.json`
+- [ ] `.env`
+- [ ] `run_attacks.sh`
+- [ ] `additional_attacks.sh`
+- [ ] `README.md`
+- [ ] `default.conf` / `nginx/default.conf` as repository files
+- [ ] `docs/screenshots/`
 
-```bash
-chmod +x run_attacks.sh
+### Step 0.6: Final file creation checklist
+Before starting Docker, make sure the following files exist in the project folder:
+
+- [ ] `docker-compose.yml`
+- [ ] `filebeat.yml`
+- [ ] `logstash.conf`
+- [ ] `siem-template.json`
+- [ ] `.env`
+- [ ] `run_attacks.sh`
+- [ ] `README.md`
+- [ ] `.gitignore`
+
+### Step 0.7: Configure Kibana in the GUI after startup
+Once Docker is running, open Kibana in the browser:
+
+```text
+http://localhost:5601
 ```
 
-### 3.8 `additional_attacks.sh`
+Then complete the following GUI configuration steps.
 
-A second, complementary attack script covering categories `run_attacks.sh` doesn't: encoded path-traversal variants, command-injection query parameters, HTTP header injection probes, unusual HTTP methods (`TRACE`, `CONNECT`, etc.), common admin/config endpoint probing (`/wp-admin`, `/server-status`, `/.env`), and authentication anomalies with multiple credential pairs. Copy it from the repo as-is; it follows the same `docker exec -i attacker` pattern as `run_attacks.sh`.
+#### A. Create the index pattern / data view
+1. Open Kibana
+2. Go to Stack Management
+3. Select Data Views
+4. Click Create data view
+5. Enter `siem-logs-*` as the pattern
+6. Set the time field to `@timestamp`
+7. Save the data view
 
-```bash
-chmod +x additional_attacks.sh
-```
+#### B. Validate the data in Discover
+1. Open Discover
+2. Choose the `siem-logs-*` data view
+3. Confirm that events appear
+4. Verify the following fields are present in the field list:
+   - `@timestamp`
+   - `source.address`
+   - `http.request.method`
+   - `http.response.status_code`
+   - `url.original`
+   - `user_agent.original`
+5. Test a few filters:
+   - `http.response.status_code: 200`
+   - `http.response.status_code: (401 OR 403)`
+   - `url.original: (*../* OR *..\\* OR *%2e%2e*)`
+   - `user_agent.original: (*sqlmap* OR *nikto* OR *nmap* OR *metasploit*)`
 
-### 3.9 `.gitignore`
+#### C. Create the alert rules in the GUI
+1. Open Alerting
+2. Click Create rule
+3. Select Custom query rule
+4. Choose the `siem-logs-*` data view
+5. Add the Query DSL rule using the syntax below
+6. Set the threshold and time window
+7. Save and enable the rule
 
-```gitignore
-.env
-__pycache__/
-.DS_Store
-```
+Important: this lab uses Query DSL as the primary method. If Kibana shows the Log threshold rule by default, switch back to Custom query rule before entering the examples below.
 
----
+Use the actual fields produced by the pipeline:
+- `http.response.status_code`
+- `url.original`
+- `user_agent.original`
+- `source.address`
 
-## 4. Start the environment
+Example Query DSL rules:
 
-```bash
-docker compose up -d
-sleep 60
-docker compose ps
-```
-
-All six services should show `Up` (and `elasticsearch`/`logstash` should show `healthy` once the health checks pass). If any service is stuck in `Created` rather than `Up`, its `depends_on` condition never got satisfied — check that service's logs first.
-
-```bash
-curl http://localhost:9200          # Elasticsearch
-curl http://localhost:5601          # Kibana
-curl http://localhost:8081/         # web-server
-```
-
-## 5. Create the Kibana Data View
-
-1. Open `http://localhost:5601`
-2. **Stack Management → Data Views → Create data view**
-3. Index pattern: `siem-logs-*`
-4. Time field: `@timestamp`
-5. Save
-
-## 6. Generate traffic and confirm ingestion
-
-```bash
-bash run_attacks.sh
-bash additional_attacks.sh
-curl "http://localhost:9200/siem-logs-*/_count"
-```
-
-In Kibana **Discover**, select the `siem-logs-*` data view and confirm events appear with these fields populated:
-- `source.address`, `http.request.method`, `http.response.status_code`, `url.original`, `user_agent.original`
-- `geoip.location`, `geoip.country_name`, `geoip.city_name` (only present when `network.geoip_source` was set — check a few documents)
-- `mitre.technique_id`, `mitre.technique_name` (only present on events matching a detection pattern)
-
-Useful test filters:
-```
-http.response.status_code: (401 OR 403)
-url.original: (*../* OR *..\\* OR *%2e%2e*)
-user_agent.original: (*sqlmap* OR *nikto* OR *nmap* OR *metasploit*)
-mitre.technique_id: *
-```
-
-## 7. Create the 5 detection rules
-
-**Alerting → Create rule → Custom query rule (Query DSL)**, data view `siem-logs-*`, 5-minute time window on all five.
-
-**Rule 1 — Brute Force (T1110):**
+- Brute-force detection:
 ```json
 {
   "query": {
     "bool": {
       "filter": [
         { "range": { "@timestamp": { "gte": "now-5m" } } },
-        { "query_string": { "query": "http.response.status_code:(401 OR 403)" } }
-      ]
-    }
-  }
-}
-```
-Threshold: count is above `5`.
 
-**Rule 2 — SQL Injection (T1190):**
+- SQL injection detection:
 ```json
 {
   "query": {
@@ -551,9 +190,8 @@ Threshold: count is above `5`.
   }
 }
 ```
-Threshold: count is above `5`.
 
-**Rule 3 — Path Traversal (T1083):**
+- Path traversal detection:
 ```json
 {
   "query": {
@@ -566,9 +204,8 @@ Threshold: count is above `5`.
   }
 }
 ```
-Threshold: count is above `5`.
 
-**Rule 4 — Reconnaissance Tooling (T1595):**
+- Suspicious user-agent detection:
 ```json
 {
   "query": {
@@ -581,9 +218,411 @@ Threshold: count is above `5`.
   }
 }
 ```
-Threshold: count is above `1`.
 
-**Rule 5 — Volumetric Anomaly (T1498):**
+        { "range": { "@timestamp": { "gte": "now-5m" } } },
+        { "range": { "http.response.status_code": { "gte": 400 } } }
+      ]
+    }
+  }
+}
+```
+
+Set the threshold to a value such as `is above 5` for repeated attack activity, and use a 5-minute time window for all examples.
+
+#### D. Build a dashboard in the GUI
+1. Open Dashboard
+2. Click Create dashboard
+3. Add the following visualizations using the actual parsed log fields:
+
+   - Attack timeline
+     - Metric: `Count`
+     - Bucket: `Date Histogram`
+     - Field: `@timestamp`
+
+   - Top source IPs
+     - Metric: `Count`
+     - Bucket: `Terms`
+     - Field: `source.address`
+
+   - Response code distribution
+     - Metric: `Count`
+     - Bucket: `Terms`
+     - Field: `http.response.status_code`
+
+   - Suspicious URL summary
+     - Metric: `Count`
+     - Bucket: `Terms`
+     - Field: `url.original`
+
+   - Tool user-agent distribution
+     - Metric: `Count`
+     - Bucket: `Terms`
+     - Field: `user_agent.original`
+
+4. Set the user-agent panel to show the top 10 values so the tools stand out clearly.
+5. Add optional filters for `curl`, `sqlmap`, `nikto`, and `nmap` when you want to isolate one tool at a time.
+
+6. Save the dashboard as `SIEM Attack Dashboard`
+
+### Dashboard validation checklist
+- [ ] `curl`, `sqlmap`, `nikto`, and `nmap` appear in the user-agent chart
+
+#### E. Final GUI check
+Before continuing, confirm that:
+- the data view exists
+- Discover has logs
+- alerts are active
+- the dashboard loads with visualizations
+
+This GUI setup is required for the phases that follow and is part of the lab workflow.
+
+---
+
+## Step-by-Step Order of Operations (A Version)
+
+Use this exact order when starting from zero:
+
+1. Install Docker Desktop / Docker Engine and Docker Compose
+2. Create a project folder such as `SIEM_Project`
+3. Create the following files:
+   - `docker-compose.yml`
+   - `filebeat.yml`
+   - `logstash.conf`
+   - `siem-template.json`
+   - `.env`
+   - `run_attacks.sh`
+   - `README.md`
+   - `.gitignore`
+4. Save the correct content into each file
+5. Rename `.env.example` to `.env` if using the example file
+6. Make the attack script executable with `chmod +x run_attacks.sh`
+7. Start the environment with `docker compose up -d`
+8. Check container status with `docker ps`
+9. Confirm Elasticsearch responds at `http://localhost:9200`
+10. Confirm Kibana responds at `http://localhost:5601`
+11. Open Kibana and create the `siem-logs-*` data view
+12. Validate logs in Discover
+13. Generate baseline traffic
+14. Verify Elasticsearch document count is increasing
+15. Run attack simulation with `bash run_attacks.sh`
+16. Review malicious events in Discover
+17. Create 5 Kibana alert rules
+18. Test the rules and confirm alert activity
+19. Build the dashboard with attack visualizations
+20. Export CSV evidence and screenshots
+21. Write the final incident report
+22. Submit the final documentation package
+
+---
+
+## Phase 1: Setup and Environment Validation
+
+### Objective
+Set up the SIEM environment and confirm that all services are running correctly before generating suspicious traffic.
+
+### 1. Start the environment from the project folder
+Open a terminal and move into the project directory you created from scratch.
+
+```bash
+cd "C:/path/to/SIEM_Project"
+docker compose up -d
+```
+
+If your machine uses Docker Compose v2, use:
+
+```bash
+docker compose up -d
+```
+
+If your folder is a different path, replace the path with your own created directory. The important point is that the user creates the folder and config files first, then starts the environment from there.
+
+### 2. Check running containers
+
+```bash
+docker ps
+```
+
+You should see containers for Elasticsearch, Logstash, Kibana, Filebeat, the web target, and the attacker environment.
+
+### 3. Validate the main services
+Check Elasticsearch:
+
+```bash
+curl http://localhost:9200
+```
+
+Check Kibana:
+
+```bash
+curl http://localhost:5601
+```
+
+Check the web application:
+
+```bash
+curl http://localhost:8081/
+```
+
+### 4. Generate baseline traffic
+
+```bash
+for i in {1..50}; do
+  curl http://localhost:8081/index.html -A "Mozilla/5.0" >/dev/null 2>&1
+  sleep 0.3
+done
+```
+
+### 5. Confirm log ingestion
+
+```bash
+curl -X GET "http://localhost:9200/siem-logs-*/_count"
+```
+
+### 6. Create the Kibana data view
+In Kibana:
+1. Open Stack Management
+2. Select Data Views
+3. Click Create data view
+4. Use `siem-logs-*`
+5. Set the time field to `@timestamp`
+6. Save the view
+
+### Phase 1 checklist
+- [ ] Docker services are up
+- [ ] Elasticsearch responds
+- [ ] Kibana responds
+- [ ] Web target responds
+- [ ] Baseline traffic generated
+- [ ] Logs are indexed
+- [ ] Data view exists
+- [ ] Logs appear in Discover
+
+---
+
+## Phase 2: Log Collection and Parsing Validation
+
+### Objective
+Make sure logs are being collected, parsed, and enriched properly before launching malicious traffic.
+
+### 1. Review Logstash logs
+
+```bash
+docker logs -f logstash
+```
+
+### 2. Review Filebeat logs
+
+```bash
+docker logs -f filebeat
+```
+
+### 3. Inspect Elasticsearch records
+
+```bash
+curl -X GET "http://localhost:9200/siem-logs-*/_search?size=5"
+```
+
+### 4. Confirm expected fields
+The pipeline should expose the following Logstash/Elasticsearch fields:
+- `@timestamp`
+- `source.address`
+- `http.request.method`
+- `http.response.status_code`
+- `url.original`
+- `user_agent.original`
+- `bytes`
+
+These are the actual ECS-style fields used by the working project and should be the ones referenced during investigation and rule creation.
+
+### Phase 2 checklist
+- [ ] Logstash container is running
+- [ ] Filebeat is shipping events
+- [ ] Elasticsearch contains documents
+- [ ] Required fields are visible
+- [ ] Discover is showing events
+
+---
+
+## Phase 3: Attack Simulation
+
+The project has two attack scripts. `run_attacks.sh` is the primary simulation and sends spoofed `X-Forwarded-For` values so the GeoIP demonstration can use public IP addresses. `additional_attacks.sh` does **not** spoof `X-Forwarded-For`; its header-injection section sends a test `X-Forwarded-For` header as part of that probe.
+
+
+### Objective
+Generate realistic malicious traffic so the SIEM can detect suspicious patterns.
+
+### 1. Brute-force login attempts
+
+```bash
+docker exec web-server bash -c "apt-get update && apt-get install -y apache2-utils && echo 'password123' | htpasswd -c -i /etc/nginx/.htpasswd admin"
+```
+
+```bash
+for i in {1..100}; do
+  curl -u admin:wrongpassword http://localhost:8081/ >/dev/null 2>&1
+  sleep 0.1
+done
+```
+
+### 2. Directory traversal attempts
+
+```bash
+for i in {1..50}; do
+  curl "http://localhost:8081/../../../etc/passwd" >/dev/null 2>&1
+  curl "http://localhost:8081/....//....//....//etc/passwd" >/dev/null 2>&1
+done
+```
+
+### 3. SQL injection attempts
+
+```bash
+for i in {1..50}; do
+  curl "http://localhost:8081/search?id=1' OR '1'='1" >/dev/null 2>&1
+  curl "http://localhost:8081/search?id=DROP TABLE users--" >/dev/null 2>&1
+done
+```
+
+### 4. XSS and command injection
+
+```bash
+for i in {1..30}; do
+  curl "http://localhost:8081/search?q=<script>alert('xss')</script>" >/dev/null 2>&1
+  curl "http://localhost:8081/cmd?param=$(whoami)" >/dev/null 2>&1
+done
+```
+
+### 5. Suspicious scanning user-agent traffic
+
+```bash
+for i in {1..30}; do
+  curl -A "curl/8.0" http://localhost:8081/ >/dev/null 2>&1
+  curl -A "sqlmap/1.3" http://localhost:8081/ >/dev/null 2>&1
+  curl -A "nikto/2.1" http://localhost:8081/ >/dev/null 2>&1
+  curl -A "nmap/6.47" http://localhost:8081/ >/dev/null 2>&1
+done
+```
+
+### 6. Large payloads
+
+```bash
+for i in {1..20}; do
+  curl http://localhost:8081/ -d "$(python -c 'print("A" * 1000000)')" >/dev/null 2>&1
+done
+```
+
+### 7. Optional full script
+
+```bash
+bash run_attacks.sh
+```
+
+### Important attacker-container note
+If the attacker container does not already have `curl` installed, run:
+
+```bash
+docker exec -it attacker bash
+apt-get update && apt-get install -y curl
+```
+
+This is required for generating the HTTP traffic that feeds the SIEM rules and dashboard.
+
+### Phase 3 checklist
+- [ ] failed login attempts created
+- [ ] traversal attempts created
+- [ ] SQL injection attempts created
+- [ ] XSS or command injection attempts created
+- [ ] suspicious scanning traffic created
+- [ ] large payload traffic created
+- [ ] suspicious events visible in Kibana
+
+---
+
+## Phase 4: Detection Rules and Alerting
+
+### Objective
+Create alerts that detect the malicious traffic generated in Phase 3 by using the actual fields produced by the pipeline.
+
+### 1. Open Kibana Alerting
+1. Go to Kibana
+2. Open Alerting
+3. Click Create rule
+4. Choose Custom query rule
+5. Select the `siem-logs-*` data view
+
+### 2. Use Query DSL for all rules
+This project uses Query DSL as the standard detection syntax. Do not switch to Log threshold for the examples below because the lab is designed around event-based matching against parsed HTTP fields.
+
+### 3. Rule 1: Brute-force detection
+```json
+{
+  "query": {
+    "bool": {
+      "filter": [
+        { "range": { "@timestamp": { "gte": "now-5m" } } },
+        { "query_string": { "query": "http.response.status_code:(401 OR 403)" } }
+      ]
+    }
+  }
+}
+```
+
+Configure the rule as:
+- Metric: `Count`
+- Condition: `is above`
+- Threshold: `5`
+- Time window: `5m`
+
+This rule identifies repeated login failures from one or more sources within a short interval.
+
+### 4. Rule 2: SQL injection detection
+```json
+{
+  "query": {
+    "bool": {
+      "filter": [
+        { "range": { "@timestamp": { "gte": "now-5m" } } },
+        { "query_string": { "query": "url.original:(*DROP* OR *UNION* OR *SELECT* OR *OR*)" } }
+      ]
+    }
+  }
+}
+```
+
+This identifies requests containing SQL injection payloads in the URL.
+
+### 5. Rule 3: Path traversal detection
+```json
+{
+  "query": {
+    "bool": {
+      "filter": [
+        { "range": { "@timestamp": { "gte": "now-5m" } } },
+        { "query_string": { "query": "url.original:(*../* OR *..\\\\* OR *%2e%2e*)" } }
+      ]
+    }
+  }
+}
+```
+
+This catches traversal attempts such as `../`, `%2e%2e`, and Windows-style encoded paths.
+
+### 6. Rule 4: Suspicious user-agent detection
+```json
+{
+  "query": {
+    "bool": {
+      "filter": [
+        { "range": { "@timestamp": { "gte": "now-5m" } } },
+        { "query_string": { "query": "user_agent.original:(*sqlmap* OR *nikto* OR *nmap* OR *metasploit*)" } }
+      ]
+    }
+  }
+}
+```
+
+This catches traffic originating from known attacker toolsets.
+
+### 7. Rule 5: HTTP error spike detection
 ```json
 {
   "query": {
@@ -596,72 +635,196 @@ Threshold: count is above `1`.
   }
 }
 ```
-Threshold: count is above `10`.
 
-If Kibana's URL-generation warning appears (`server.publicBaseUrl is not set`), set it under **Stack Management → Advanced Settings**, or ignore it — it doesn't affect rule evaluation, only shareable links.
+Configure the rule to count events over a 5-minute window and trigger when the count exceeds a chosen threshold such as 5 or 10.
 
-## 8. Build the dashboard
+### Important: set the Kibana base URL
+Before creating public alert links, set the Kibana base URL to:
 
-Base panels (all `Terms`/`Date Histogram` bucket aggregations on `siem-logs-*`):
+```text
+http://localhost:5601
+```
 
-| Panel | Bucket | Field | Chart type |
-|---|---|---|---|
-| Attack Timeline | Date Histogram | `@timestamp` | Stacked bar (split by `http.response.status_code`) |
-| Top Source IPs | Terms | `source.address` | Horizontal bar |
-| Response Code Distribution | Terms | `http.response.status_code` | Donut |
-| Suspicious URL Summary | Terms | `url.original` | Data table |
-| Tool User-Agent Distribution | Terms | `user_agent.original` | Horizontal bar — add filter `NOT user_agent.original: curl*` to keep default curl noise from burying real scanner signatures |
+This removes the warning:
 
-Additional panels built on top of the base pipeline:
+> server.publicBaseUrl is not set. Generated URLs will either be relative or empty.
 
-| Panel | Setup |
-|---|---|
-| Total Events (24h) | Metric, Count, no bucket |
-| Unique Attacker IPs | Metric, Unique Count on `source.address` |
-| High-Severity Hits | Metric, Count, filtered to `http.response.status_code >= 400` |
-| MITRE ATT&CK Technique Breakdown | Terms on `mitre.technique_id`, horizontal bar |
-| Geographic Attack Map | Kibana Maps → Documents layer → `geoip.location`, clustered |
-| Raw Event Triage Table | Saved Discover search, filtered to `http.response.status_code >= 400`, columns: `@timestamp`, `source.address`, `http.response.status_code`, `url.original`, `user_agent.original` |
+### Step-by-step Kibana verification before building rules
+1. Open Kibana at `http://localhost:5601`
+2. Go to Stack Management → Data Views
+3. Create a data view named `siem-logs-*`
+4. Set the time field to `@timestamp`
+5. Open Discover and verify that events appear
+6. Confirm the following fields exist:
+   - `source.address`
+   - `http.request.method`
+   - `http.response.status_code`
+   - `url.original`
+   - `user_agent.original`
+7. Test a few searches:
+   - `source.address: *`
+   - `http.response.status_code >= 400`
+   - `url.original: *cmd*`
+   - `user_agent.original: *sqlmap*`
 
-Save as **SIEM Attack Dashboard**.
-
-## 9. Investigation and reporting
-
-- **Discover:** sort by `@timestamp`, filter by `source.address` or `mitre.technique_id` to correlate activity.
-- **Export evidence:** CSV export from Discover, plus dashboard screenshots.
-- **Incident report:** summary, attack timeline, techniques observed (reference the MITRE table), source IPs, findings, recommended mitigations.
+### Phase 4 checklist
+- [ ] Kibana public base URL is configured
+- [ ] 5 rules created
+- [ ] rule queries match the actual parsed log fields
+- [ ] alerts fire with test traffic
+- [ ] alert activity is visible in Kibana
 
 ---
 
-## Quick reference
+## Phase 5: Investigation and Reporting
+
+### Objective
+Analyze the malicious events, correlate the patterns, and document the findings.
+
+### 1. Use Kibana Discover
+Sort by `@timestamp` and review the suspicious activity in order.
+Look for:
+- repeated failed logins
+- traversal attacks
+- SQL injection payloads
+- suspicious user-agent tools
+- large or malformed requests
+
+### 2. Correlate by source IP
+Filter by `source.address` and determine which source IP generated the most harmful activity.
+
+### 3. Correlate by time window
+Identify the time period when the attack activity surged.
+
+### 4. Build a dashboard
+Create visualizations for:
+- attack timeline
+- top source IPs
+- response code distribution
+- suspicious user-agent summary
+- attack-type breakdown
+
+### 5. Export evidence
+Save CSV files or screenshots such as:
+- `attack_logs.csv`
+- `failed_logins.csv`
+- `traversal_requests.csv`
+- `sql_injection_requests.csv`
+- `suspicious_user_agents.csv`
+
+### 6. Write the incident report
+The final write-up should include:
+- summary of the incident
+- attack timeline
+- attack methods used
+- source IPs involved
+- findings from Kibana and alerting
+- impact assessment
+- recommended mitigation steps
+
+### Phase 5 checklist
+- [ ] timeline reviewed
+- [ ] IP correlation complete
+- [ ] time-based escalation identified
+- [ ] dashboard created
+- [ ] evidence exported
+- [ ] final report written
+
+---
+
+## Quick reference commands
+
+### Start environment from scratch
+First create the project folder and all required files yourself. Then run:
 
 ```bash
-docker compose up -d                                    # start
-docker compose ps                                        # health check
-curl "http://localhost:9200/siem-logs-*/_count"           # event count
-bash run_attacks.sh && bash additional_attacks.sh          # generate traffic
-docker logs logstash --tail 50                            # pipeline errors
+cd "C:/path/to/SIEM_Project"
+docker compose up -d
 ```
+
+If Docker Compose v2 is installed, use:
+
+```bash
+docker compose up -d
+```
+
+### Check containers
+```bash
+docker ps
+```
+
+### Check Elasticsearch
+```bash
+curl http://localhost:9200
+```
+
+### Check Kibana
+```bash
+curl http://localhost:5601
+```
+
+### Review event count
+```bash
+curl -X GET "http://localhost:9200/siem-logs-*/_count"
+```
+
+### Run the full attack script
+```bash
+bash run_attacks.sh
+```
+
+---
 
 ## Troubleshooting
 
-**No logs appearing:** `docker compose ps` — if `logstash` isn't `healthy`, Kibana/Filebeat never start (they depend on it). Check `docker logs logstash`.
+### No logs are appearing
+Check the Docker state and service logs:
 
-**`geoip.location` has no data:** confirm `nginx/default.conf` is actually mounted (`docker exec web-server cat /etc/nginx/conf.d/default.conf | head -2` should show `siem_custom`, not the stock nginx format), and that `run_attacks.sh` ran after the container was up.
+```bash
+docker ps
+docker logs logstash
+docker logs filebeat
+```
 
-**Data disappeared after a restart:** confirm `esdata` is a named volume in `docker-compose.yml` and wasn't removed with `docker compose down -v`. Kibana Data Views/dashboards/rules live in Elasticsearch too, so wiping it wipes those as well.
+### Kibana shows no data
+Make sure the data view exists and uses `siem-logs-*` with `@timestamp` as the time field.
 
-**Alerts not firing:** confirm the rule's Query DSL field names match exactly (`http.response.status_code`, not `response`), and that the 5-minute window covers when `run_attacks.sh` actually ran.
+### Web target is not responding
 
-## Screenshot reference
+```bash
+curl http://localhost:8081/
+docker ps
+```
+
+### Alerts are not firing
+Ensure the query matches the actual logged fields and that the time range includes the attack window.
+
+---
+
+## Final completion checklist
+
+- [ ] environment started successfully
+- [ ] logs are flowing into Elasticsearch
+- [ ] Kibana data view created
+- [ ] attack simulation performed
+- [ ] malicious traffic visible in Discover
+- [ ] 5 detection rules created
+- [ ] alerts fired successfully
+- [ ] dashboard created
+- [ ] evidence exported
+- [ ] final report completed
+
+---
+
+## Conclusion
+This project models a complete end-to-end SIEM workflow. It demonstrates how to ingest logs, generate realistic malicious activity, create detection rules, and investigate the resulting attacks in a real security-monitoring environment.
+
+## Screenshot References
+
+The screenshots used as execution evidence are stored in the repository under `docs/screenshots/` and should be referenced with these exact relative paths:
 
 - `docs/screenshots/DockerContainers.png`
 - `docs/screenshots/Discover_logs_details.png`
 - `docs/screenshots/Bruteforce.png`
 - `docs/screenshots/Bruteforce_details.png`
 - `docs/screenshots/SQL_Injection_details.png`
-- `docs/screenshots/PathTravesal.png`
-- `docs/screenshots/Rules.png`
-- `docs/screenshots/Dashboard_part1.png`
-- `docs/screenshots/Dashboard_part2.png`
-- `docs/screenshots/Dashboard_part3.png`
