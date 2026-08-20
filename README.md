@@ -2,7 +2,7 @@
 
 A self-contained Security Information and Event Management (SIEM) lab built on the Elastic Stack (Elasticsearch, Logstash, Kibana) and Filebeat, running under Docker Compose with resource-constrained containers, custom log parsing, a threat-simulation script, and detection rules mapped to MITRE ATT&CK.
 
-This is an project overview. Consult the "StepByStep.md" file for more details. 
+This is a project overview. Consult the "StepByStep.md" file, in the folder, for more details. 
 
 ---
 
