@@ -110,7 +110,7 @@ In Kibana Discover (`siem-logs-*`), incoming events are parsed into ECS-style st
 
 Detection rules run on a 5-minute evaluation window under **Stack Management → Rules and Alerts**. Alert status flips to **Active**/**Flapping** when a threshold is breached — this is a live brute-force rule catching the simulated credential-stuffing traffic:
 
-![Brute-force alert](docs/screenshots/Bruteforce.png)
+![Brute-force alert](docs/screenshots/Bruteforce_rule.png)
 ![Brute-force alert detail](docs/screenshots/Bruteforce_details.png)
 ![SQL injection alert detail](docs/screenshots/SQL_Injection_details.png)
 
